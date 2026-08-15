@@ -13,7 +13,60 @@ function initAdmin() {
   const loginBtn = document.getElementById("loginBtn");
   const whoEmail = document.getElementById("whoEmail");
   const settingsEmail = document.getElementById("settingsEmail");
+  const settingsUid = document.getElementById("settingsUid");
+  const settingsProjectId = document.getElementById("settingsProjectId");
+  const copyUidBtn = document.getElementById("copyUidBtn");
   const logoutBtn = document.getElementById("logoutBtn");
+  const errorBanner = document.getElementById("errorBanner");
+  const errorBannerText = document.getElementById("errorBannerText");
+
+  // ============ ERROR REPORTING ============
+  // Turns a raw Firebase error into something that actually explains what's
+  // wrong, instead of a generic "check your connection" message.
+  function describeFirestoreError(err, context = "") {
+    const code = err?.code || "unknown";
+    const where = context ? ` (${context})` : "";
+    if (code === "permission-denied") {
+      return `Blocked by Firestore rules${where} [permission-denied]. Your signed-in UID isn't recognized as admin — check Settings for your real UID, and confirm it's pasted into every ADMIN_UID spot in your Firestore rules, then Publish again.`;
+    }
+    if (code === "unauthenticated") {
+      return `Not signed in${where} [unauthenticated]. Try logging out and back in.`;
+    }
+    if (code === "unavailable" || code === "failed-precondition") {
+      return `Can't reach Firestore${where} [${code}]. Check your internet connection.`;
+    }
+    if (code === "not-found") {
+      return `That document doesn't exist${where} [not-found].`;
+    }
+    return `${err?.message || "Unknown error"}${where} [${code}]`;
+  }
+
+  function showErrorBanner(text) {
+    errorBannerText.textContent = text;
+    errorBanner.hidden = false;
+  }
+  document.getElementById("errorBannerClose").addEventListener("click", () => { errorBanner.hidden = true; });
+
+  // ============ SETTINGS DIAGNOSTICS ============
+  // Tracks read status per collection so Settings can show exactly which
+  // ones are blocked, instead of a single vague error.
+  const diagStatus = {
+    "analytics/pageViews": "pending",
+    "analytics/appDownloads": "pending",
+    "hireRequests": "pending",
+    "projects": "pending",
+    "apps": "pending",
+  };
+  function renderDiagnostics() {
+    const box = document.getElementById("settingsDiagnostics");
+    if (!box) return;
+    box.innerHTML = Object.entries(diagStatus).map(([key, status]) => `
+      <div class="diag-row">
+        <span class="diag-dot ${status === 'ok' ? 'ok' : status === 'pending' ? 'pending' : 'bad'}"></span>
+        <span class="mono">${key}</span>
+        <span style="color:var(--ink-dim);">${status === 'ok' ? 'readable' : status === 'pending' ? 'checking…' : 'blocked'}</span>
+      </div>`).join("");
+  }
 
   // ============ AUTH ============
   loginForm.addEventListener("submit", async (e) => {
@@ -34,16 +87,19 @@ function initAdmin() {
     }
   });
 
-  logoutBtn.addEventListener("click", () => ADMIN.logout());
-
   function friendlyAuthError(err) {
     const code = err.code || "";
     if (code.includes("invalid-credential") || code.includes("wrong-password") || code.includes("user-not-found")) {
       return "Incorrect email or password.";
     }
     if (code.includes("too-many-requests")) return "Too many attempts — try again shortly.";
-    return "Couldn't sign in. Check your connection and try again.";
+    if (code.includes("network-request-failed")) return "Network error — check your internet connection.";
+    return `Couldn't sign in — ${err.message || "unknown error"} [${code || "no code"}]`;
   }
+
+  logoutBtn.addEventListener("click", () => ADMIN.logout());
+
+
 
   let unsubscribers = [];
   function clearSubscriptions() {
@@ -57,11 +113,26 @@ function initAdmin() {
       shell.hidden = false;
       whoEmail.textContent = user.email;
       settingsEmail.textContent = user.email;
+      settingsUid.textContent = user.uid;
+      settingsProjectId.textContent = ADMIN.projectId || "—";
+      errorBanner.hidden = true;
       startLiveData();
     } else {
       loginScreen.hidden = false;
       shell.hidden = true;
       clearSubscriptions();
+    }
+  });
+
+  copyUidBtn.addEventListener("click", async () => {
+    const uid = settingsUid.textContent;
+    if (!uid || uid === "—") return;
+    try {
+      await navigator.clipboard.writeText(uid);
+      copyUidBtn.textContent = "Copied!";
+      setTimeout(() => { copyUidBtn.textContent = "Copy UID"; }, 1500);
+    } catch {
+      alert(uid); // clipboard blocked (common on http, non-localhost) — show it so it can be selected manually
     }
   });
 
@@ -86,22 +157,44 @@ function initAdmin() {
 
   function startLiveData() {
     clearSubscriptions();
+
+    // Any read failure here (almost always Firestore rules blocking the
+    // signed-in UID) surfaces as a real banner + a per-collection status in
+    // Settings, instead of the dashboard just silently showing zeros.
+    function onErr(key) {
+      return (err, context) => {
+        diagStatus[key] = "bad";
+        renderDiagnostics();
+        showErrorBanner(describeFirestoreError(err, context));
+      };
+    }
+    function markOk(key) {
+      diagStatus[key] = "ok";
+      renderDiagnostics();
+    }
+
     unsubscribers.push(ADMIN.watchDoc("analytics", "pageViews", (data) => {
-      pageViews = data; renderOverview();
-    }));
+      pageViews = data; markOk("analytics/pageViews"); renderOverview();
+    }, onErr("analytics/pageViews")));
+
     unsubscribers.push(ADMIN.watchDoc("analytics", "appDownloads", (data) => {
-      appDownloads = data; renderOverview();
-    }));
+      appDownloads = data; markOk("analytics/appDownloads"); renderOverview();
+    }, onErr("analytics/appDownloads")));
+
     unsubscribers.push(ADMIN.watchCollection("hireRequests", "createdAt", (docs) => {
       hireRequests = docs.reverse(); // newest first
-      renderOverview(); renderHires();
-    }));
+      markOk("hireRequests"); renderOverview(); renderHires();
+    }, "asc", onErr("hireRequests")));
+
     unsubscribers.push(ADMIN.watchCollection("projects", "order", (docs) => {
-      websites = docs; renderWebsites(); renderOverview();
-    }));
+      websites = docs; markOk("projects"); renderWebsites(); renderOverview();
+    }, "asc", onErr("projects")));
+
     unsubscribers.push(ADMIN.watchCollection("apps", "order", (docs) => {
-      apps = docs; renderApps(); renderOverview();
-    }));
+      apps = docs; markOk("apps"); renderApps(); renderOverview();
+    }, "asc", onErr("apps")));
+
+    renderDiagnostics();
   }
 
   // ============ OVERVIEW ============
@@ -306,7 +399,7 @@ function initAdmin() {
       else await ADMIN.add("projects", data);
       closeModals();
     } catch (err) {
-      websiteStatus.textContent = "Couldn't save — check your connection and Firestore rules.";
+      websiteStatus.textContent = describeFirestoreError(err, "projects");
       console.error(err);
     } finally {
       btn.disabled = false; btn.textContent = "Save Website";
@@ -361,7 +454,7 @@ function initAdmin() {
     }
   }
 
-  function renderVersions() {
+    function renderVersions() {
     const tbody = document.querySelector("#versionsTable tbody");
     tbody.innerHTML = currentVersions.map(v => `<tr>
       <td class="mono">${escapeHtml(v.version)}</td>
@@ -378,7 +471,7 @@ function initAdmin() {
       btn.addEventListener("click", async () => {
         btn.disabled = true; btn.textContent = "Setting…";
         try { await ADMIN.setVisibleVersion(currentVersionsAppId, btn.dataset.setLive); }
-        catch (err) { console.error(err); alert("Couldn't set this version live — check Firestore rules."); }
+        catch (err) { console.error(err); alert(describeFirestoreError(err, "apps/versions")); }
       });
     });
     tbody.querySelectorAll("[data-edit-version]").forEach(btn => {
@@ -441,4 +534,99 @@ function initAdmin() {
       if (id) await ADMIN.updateVersion(currentVersionsAppId, id, data);
       else savedId = (await ADMIN.addVersion(currentVersionsAppId, data)).id;
       if (makeVisible) await ADMIN.setVisibleVersion(currentVersionsAppId, savedId);
-      versionModalOverlay.classList.remove("open"); // only close the 
+      versionModalOverlay.classList.remove("open"); // only close the version modal, keep the app modal open
+    } catch (err) {
+      versionStatus.textContent = describeFirestoreError(err, "apps/versions");
+      console.error(err);
+    } finally {
+      btn.disabled = false; btn.textContent = "Save Version";
+    }
+  });
+
+  appForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const id = document.getElementById("appDocId").value;
+    const name = document.getElementById("appName").value.trim();
+    let appId = document.getElementById("appId").value.trim();
+    if (!name) { appStatus.textContent = "App name is required."; return; }
+    if (!appId) appId = name.replace(/[^a-zA-Z0-9]/g, "");
+
+    const data = {
+      appId,
+      name,
+      tag: document.getElementById("appTag").value.trim(),
+      desc: document.getElementById("appDesc").value.trim(),
+      features: document.getElementById("appFeatures").value.split("\n").map(s => s.trim()).filter(Boolean),
+      icon: document.getElementById("appIcon").value.trim() || "📱",
+      badge: document.getElementById("appBadge").value.trim() || "Free",
+      apkUrl: document.getElementById("appApkUrl").value.trim(),
+      fileName: document.getElementById("appFileName").value.trim() || (name + ".apk"),
+      meta: document.getElementById("appMeta").value.trim(),
+      order: Number(document.getElementById("appOrder").value) || 0,
+      active: document.getElementById("appActive").checked,
+    };
+
+    const btn = document.getElementById("appSaveBtn");
+    btn.disabled = true; btn.textContent = "Saving…";
+    try {
+      if (id) {
+        await ADMIN.update("apps", id, data);
+        closeModals();
+      } else {
+        const ref = await ADMIN.add("apps", data);
+        // Reopen immediately in edit mode so "Versions" unlocks right away.
+        openAppModal({ id: ref.id, ...data });
+        appStatus.textContent = "App created — add a version below to make it downloadable.";
+        appStatus.style.color = "var(--good)";
+      }
+    } catch (err) {
+      appStatus.textContent = describeFirestoreError(err, "apps");
+      console.error(err);
+    } finally {
+      btn.disabled = false; btn.textContent = "Save App";
+    }
+  });
+
+  // ============ CONFIRM DELETE MODAL ============
+  const confirmModalOverlay = document.getElementById("confirmModalOverlay");
+  const confirmModalText = document.getElementById("confirmModalText");
+  const confirmDeleteBtn = document.getElementById("confirmDeleteBtn");
+  let pendingDelete = null;
+
+  // collectionName/id delete a top-level doc; pass customAction instead to
+  // run an arbitrary delete (used for the apps/{id}/versions subcollection).
+  function confirmDelete(collectionName, id, text, customAction = null) {
+    pendingDelete = { collectionName, id, customAction };
+    confirmModalText.textContent = text;
+    confirmModalOverlay.classList.add("open");
+  }
+
+  confirmDeleteBtn.addEventListener("click", async () => {
+    if (!pendingDelete) return;
+    confirmDeleteBtn.disabled = true;
+    confirmDeleteBtn.textContent = "Deleting…";
+    try {
+      if (pendingDelete.customAction) await pendingDelete.customAction();
+      else await ADMIN.remove(pendingDelete.collectionName, pendingDelete.id);
+      confirmModalOverlay.classList.remove("open"); // only close the confirm dialog, keep any modal beneath it open
+    } catch (err) {
+      console.error(err);
+      alert(describeFirestoreError(err, pendingDelete.collectionName || "delete"));
+    } finally {
+      confirmDeleteBtn.disabled = false;
+      confirmDeleteBtn.textContent = "Delete";
+      pendingDelete = null;
+    }
+  });
+
+  // ============ MODAL SHARED ============
+  function closeModals() {
+    document.querySelectorAll(".modal-overlay").forEach(o => o.classList.remove("open"));
+    if (unsubVersions) { unsubVersions(); unsubVersions = null; }
+  }
+  document.querySelectorAll("[data-close-modal]").forEach(btn => btn.addEventListener("click", closeModals));
+  document.querySelectorAll(".modal-overlay").forEach(overlay => {
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) closeModals(); });
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModals(); });
+}
