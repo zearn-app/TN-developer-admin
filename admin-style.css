@@ -107,6 +107,23 @@ input, select, textarea{font-family:inherit;}
 .view-head p{color:var(--ink-dim); font-size:0.9rem; margin-top:0.25rem;}
 .view-head .btn-primary{margin-top:1rem;}
 
+/* ============ ERROR BANNER ============ */
+.error-banner{
+  display:flex; align-items:flex-start; justify-content:space-between; gap:1rem;
+  background:rgba(255,92,122,0.12); border:1px solid var(--bad); color:#FFD7DF;
+  border-radius:12px; padding:0.85rem 1rem; margin-bottom:1.5rem; font-size:0.85rem; line-height:1.5;
+}
+.error-banner .mono{color:#FFD7DF;}
+#errorBannerClose{font-size:1.2rem; color:#FFD7DF; line-height:1; flex-shrink:0;}
+#errorBannerClose:hover{opacity:0.7;}
+
+/* ============ SETTINGS DIAGNOSTICS ============ */
+.diag-row{display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0; font-size:0.85rem;}
+.diag-dot{width:9px; height:9px; border-radius:50%; flex-shrink:0;}
+.diag-dot.ok{background:var(--good);}
+.diag-dot.bad{background:var(--bad);}
+.diag-dot.pending{background:var(--ink-dim);}
+
 /* ============ STAT TILES ============ */
 .stat-row{display:grid; grid-template-columns:repeat(auto-fit, minmax(160px,1fr)); gap:1rem; margin-bottom:1.75rem;}
 .stat-tile{
