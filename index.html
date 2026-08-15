@@ -49,6 +49,11 @@
 
   <main class="main">
 
+    <div class="error-banner" id="errorBanner" hidden>
+      <span id="errorBannerText"></span>
+      <button type="button" id="errorBannerClose">&times;</button>
+    </div>
+
     <!-- OVERVIEW -->
     <section class="view active" id="view-overview">
       <header class="view-head">
@@ -160,11 +165,14 @@
       </header>
       <div class="panel">
         <h3>Connected Firebase Project</h3>
-        <p class="mono settings-line">tn-developer-54557</p>
+        <p class="mono settings-line" id="settingsProjectId">—</p>
         <h3 style="margin-top:1.5rem;">Signed in as</h3>
         <p class="mono settings-line" id="settingsEmail">—</p>
-        <h3 style="margin-top:1.5rem;">Reminder</h3>
-        <p>Firestore rules must allow your admin UID to read/write <code>projects</code>, <code>apps</code>, and <code>hireRequests</code>. See README.md in this folder for the exact rules to paste.</p>
+        <h3 style="margin-top:1.5rem;">Your Admin UID <span style="font-weight:400; color:var(--ink-dim); font-size:0.8rem;">— this exact string must replace every <code>ADMIN_UID</code> in your Firestore rules</span></h3>
+        <p class="mono settings-line" id="settingsUid" style="word-break:break-all;">—</p>
+        <button type="button" class="btn-outline" id="copyUidBtn" style="margin-top:0.6rem;">Copy UID</button>
+        <h3 style="margin-top:1.5rem;">Connection status</h3>
+        <div id="settingsDiagnostics"></div>
       </div>
     </section>
 
@@ -316,4 +324,3 @@
 <script src="admin.js"></script>
 </body>
 </html>
-
